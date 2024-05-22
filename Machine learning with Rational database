@@ -1,0 +1,95 @@
+import sqlite3
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+
+# Connect to SQLite database
+conn = sqlite3.connect('library.db')
+c = conn.cursor()
+
+# Create tables
+c.execute('''CREATE TABLE IF NOT EXISTS books (
+                book_id INTEGER PRIMARY KEY,
+                title TEXT,
+                author TEXT,
+                genre TEXT,
+                available_copies INTEGER
+            )''')
+
+c.execute('''CREATE TABLE IF NOT EXISTS borrowers (
+                borrower_id INTEGER PRIMARY KEY,
+                name TEXT,
+                email TEXT UNIQUE
+            )''')
+
+c.execute('''CREATE TABLE IF NOT EXISTS transactions (
+                transaction_id INTEGER PRIMARY KEY,
+                book_id INTEGER,
+                borrower_id INTEGER,
+                date_borrowed DATE,
+                date_due DATE,
+                date_returned DATE,
+                FOREIGN KEY(book_id) REFERENCES books(book_id),
+                FOREIGN KEY(borrower_id) REFERENCES borrowers(borrower_id)
+            )''')
+
+# Functions for library operations
+def add_book(title, author, genre, available_copies):
+    c.execute('''INSERT INTO books (title, author, genre, available_copies) VALUES (?, ?, ?, ?)''', (title, author, genre, available_copies))
+    conn.commit()
+
+def add_borrower(name, email):
+    c.execute('''INSERT INTO borrowers (name, email) VALUES (?, ?)''', (name, email))
+    conn.commit()
+
+def borrow_book(book_id, borrower_id, date_borrowed, date_due):
+    c.execute('''INSERT INTO transactions (book_id, borrower_id, date_borrowed, date_due) VALUES (?, ?, ?, ?)''', (book_id, borrower_id, date_borrowed, date_due))
+    conn.commit()
+
+def return_book(transaction_id, date_returned):
+    c.execute('''UPDATE transactions SET date_returned = ? WHERE transaction_id = ?''', (date_returned, transaction_id))
+    conn.commit()
+
+def get_borrowed_books(borrower_id):
+    c.execute('''SELECT book_id FROM transactions WHERE borrower_id = ? AND date_returned IS NULL''', (borrower_id,))
+    return c.fetchall()
+
+def recommend_books(borrower_id, num_recommendations=5):
+    # Get books borrowed by the borrower
+    borrowed_books = get_borrowed_books(borrower_id)
+    borrowed_books = [book[0] for book in borrowed_books]
+
+    # Get all book IDs
+    c.execute('''SELECT book_id FROM books''')
+    all_books = [book[0] for book in c.fetchall()]
+
+    # Create a binary vector indicating borrowed books
+    borrowed_vector = [1 if book_id in borrowed_books else 0 for book_id in all_books]
+
+    # Calculate cosine similarity between borrowed vector and all book vectors
+    book_vectors = []
+    for book_id in all_books:
+        vector = [1 if book_id == book else 0 for book in borrowed_books]
+        book_vectors.append(vector)
+
+    scaler = StandardScaler()
+    book_vectors_scaled = scaler.fit_transform(book_vectors)
+
+    similarity_scores = cosine_similarity([borrowed_vector], book_vectors_scaled)
+
+    # Get indices of top recommendations
+    top_indices = np.argsort(similarity_scores)[0][-num_recommendations:][::-1]
+
+    # Get recommended book IDs
+    recommended_books = [all_books[i] for i in top_indices]
+
+    # Get book details
+    recommended_books_details = []
+    for book_id in recommended_books:
+        c.execute('''SELECT * FROM books WHERE book_id = ?''', (book_id,))
+        recommended_books_details.append(c.fetchone())
+
+    return recommended_books_details
+
+# Close connection
+conn.close()
